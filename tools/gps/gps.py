@@ -215,7 +215,19 @@ class gps_io(object):
         self.verbosity_level = verbosity_level
         self.prog_name = os.path.basename(sys.argv[0])
         Serial = serial
-        Serial_v3 = Serial and Serial.VERSION.split('.')[0] >= '3'
+        serial_version = None
+        if Serial:
+            serial_version = getattr(Serial, 'VERSION', None)
+            if serial_version is None:
+                serial_version = getattr(Serial, '__version__', None)
+        if serial_version is None:
+            # Assume modern pyserial when version is unavailable.
+            Serial_v3 = True
+        else:
+            try:
+                Serial_v3 = int(str(serial_version).split('.')[0]) >= 3
+            except ValueError:
+                Serial_v3 = True
         # buffer to hold read data
         self.out = b''
 
