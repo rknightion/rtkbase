@@ -100,11 +100,20 @@ class RtkController:
             else:
                 spawn_command = self.bin_path + "/rtkrcv -o " + os.path.join(self.config_path, config_name)
 
-            self.child = pexpect.spawn(spawn_command, cwd = self.bin_path, echo = False, timeout=120)
+            try:
+                self.child = pexpect.spawn(spawn_command, cwd=self.bin_path, echo=False, timeout=15)
+            except Exception as exc:
+                print("Failed to spawn rtkrcv:", exc)
+                self.semaphore.release()
+                return -1
 
             print('Launching rtkrcv with: "' + spawn_command + '"')
 
             if self.expectAnswer("spawn") < 0:
+                try:
+                    self.child.terminate(force=True)
+                except Exception:
+                    pass
                 self.semaphore.release()
                 return -1
             
@@ -415,6 +424,4 @@ class RtkController:
             self.restart()
 
         return 1
-
-
 
