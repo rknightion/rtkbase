@@ -118,7 +118,10 @@ class RtkController:
                 return -1
             
             #storing options/values in self.settings dict
-            self.get_all_options_values()
+            try:
+                self.get_all_options_values()
+            except Exception as exc:
+                print("Failed to read rtkrcv options:", exc)
 
             self.semaphore.release()
             self.launched = True
@@ -386,9 +389,11 @@ class RtkController:
 
         if type(answer) is list:
             for elt in answer:
-                #print("ELT : ", elt)
-                option_name = elt.split()[0]
-                option_value = elt.split()[1].strip("=")
+                parts = elt.split()
+                if len(parts) < 2:
+                    continue
+                option_name = parts[0]
+                option_value = parts[1].strip("=")
                 self.settings[option_name] = option_value
         else:
             self.semaphore.release()
@@ -424,4 +429,3 @@ class RtkController:
             self.restart()
 
         return 1
-
