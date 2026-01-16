@@ -50,14 +50,29 @@ class RtkController:
         self.launched = False
         self.restart_needed = False
         self.current_config = ""
+    
+    def _child_before_text(self):
+        data = self.child.before
+        if isinstance(data, bytes):
+            return data.decode(errors="replace")
+        return str(data)
 
     def expectAnswer(self, last_command = ""):
-        a = self.child.expect(["rtkrcv>", pexpect.EOF, "error"])
+        try:
+            a = self.child.expect(["rtkrcv>", pexpect.EOF, "error"])
+        except pexpect.exceptions.TIMEOUT:
+            print("Timeout while waiting for rtkrcv> after", last_command)
+            print("output before timeout: " + self._child_before_text())
+            return -1
+        except pexpect.exceptions.ExceptionPexpect as exc:
+            print("pexpect error after", last_command, ":", exc)
+            print("output before exception: " + self._child_before_text())
+            return -1
         # check rtkrcv output for any errors
         if a == 1:
             print("got EOF while waiting for rtkrcv> . Shutting down")
             print("This means something went wrong and rtkrcv just stopped")
-            print("output before exception: " + str(self.child))
+            print("output before exception: " + self._child_before_text())
             return -1
 
         if a == 2:
@@ -85,7 +100,7 @@ class RtkController:
             else:
                 spawn_command = self.bin_path + "/rtkrcv -o " + os.path.join(self.config_path, config_name)
 
-            self.child = pexpect.spawn(spawn_command, cwd = self.bin_path, echo = False)
+            self.child = pexpect.spawn(spawn_command, cwd = self.bin_path, echo = False, timeout=120)
 
             print('Launching rtkrcv with: "' + spawn_command + '"')
 
@@ -329,7 +344,7 @@ class RtkController:
             self.semaphore.release()
             return -1
         
-        answer = self.child.before.decode().split("\r\n")
+        answer = self._child_before_text().split("\r\n")
         #answer is a list containing :
         # - the string sent to rtkrcv
         # - a string containing the answer as displayed directly inside rtkrcv
@@ -358,7 +373,7 @@ class RtkController:
             self.semaphore.release()
             return -1
         
-        answer = self.child.before.decode().split("\r\n")[1:-1]
+        answer = self._child_before_text().split("\r\n")[1:-1]
 
         if type(answer) is list:
             for elt in answer:
@@ -383,7 +398,7 @@ class RtkController:
             self.semaphore.release()
             return -1
 
-        answer = self.child.before.decode().split("\r\n")
+        answer = self._child_before_text().split("\r\n")
         #answer is a list containing :
         # - the string sent to rtkrcv
         # - a string containing the answer as displayed directly inside rtkrcv
@@ -400,8 +415,6 @@ class RtkController:
             self.restart()
 
         return 1
-
-
 
 
 
