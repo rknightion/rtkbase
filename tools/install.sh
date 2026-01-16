@@ -133,6 +133,7 @@ man_help(){
     echo '                             repo     (you need to add the --rtkbase-repo argument with a branch name)'
     echo '                             url      (you need to add the --rtkbase-custom-source argument with an url)'
     echo '                             bundled  (available if the rtkbase archive is bundled with the install script)'
+    echo '                             local    (use the local rtkbase repository)'
     echo ''
     echo '        -u | --user'
     echo '                         Use this username as User= inside service unit and for path to rtkbase:'
@@ -154,6 +155,9 @@ man_help(){
     echo ''
     echo '        -j | --rtkbase-bundled'
     echo '                         Extract the rtkbase files bundled with this script, if available.'
+    echo ''
+    echo '        -l | --rtkbase-local'
+    echo '                         Use the local rtkbase repository (the parent directory of this script).'
     echo ''
     echo '        -f | --rtkbase-custom <source>'
     echo '                         Get RTKBASE from an url.'
@@ -451,6 +455,28 @@ _add_rtkbase_path_to_environment(){
     fi
     rtkbase_path=$(pwd)/rtkbase
     export rtkbase_path
+}
+
+install_rtkbase_local() {
+    echo '################################'
+    echo 'USING LOCAL RTKBASE REPOSITORY'
+    echo '################################'
+    local script_dir
+    local repo_root
+    script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
+    repo_root=$(dirname "${script_dir}")
+    if [[ ! -f "${repo_root}/settings.conf.default" ]]; then
+      echo 'Local repository not found. Please run this script from a valid rtkbase checkout.'
+      exit 1
+    fi
+    rtkbase_path="${repo_root}"
+    export rtkbase_path
+    if grep -q '^rtkbase_path=' /etc/environment
+      then
+        sed -i "s@^rtkbase_path=.*@rtkbase_path=${rtkbase_path}@" /etc/environment
+      else
+        echo "rtkbase_path=${rtkbase_path}" >> /etc/environment
+    fi
 }
 
 rtkbase_requirements(){
@@ -899,6 +925,7 @@ main() {
   ARG_RTKBASE_RELEASE=0
   ARG_RTKBASE_REPO=0
   ARG_RTKBASE_BLD=0
+  ARG_RTKBASE_LOCAL=0
   ARG_RTKBASE_SRC=0
   ARG_RTKBASE_RQS=0
   ARG_UNIT=0
@@ -911,7 +938,7 @@ main() {
   ARG_ZEROCONF=0
   ARG_ALL=0
 
-  PARSED_ARGUMENTS=$(getopt --name install --options hu:drbi:jf:qtgencmsza: --longoptions help,user:,dependencies,rtklib,rtkbase-release,rtkbase-repo:,rtkbase-bundled,rtkbase-custom:,rtkbase-requirements,unit-files,gpsd-chrony,detect-gnss,no-write-port,configure-gnss,detect-modem,start-services,zeroconf,all: -- "$@")
+  PARSED_ARGUMENTS=$(getopt --name install --options hu:drbi:jlf:qtgencmsza: --longoptions help,user:,dependencies,rtklib,rtkbase-release,rtkbase-repo:,rtkbase-bundled,rtkbase-local,rtkbase-custom:,rtkbase-requirements,unit-files,gpsd-chrony,detect-gnss,no-write-port,configure-gnss,detect-modem,start-services,zeroconf,all: -- "$@")
   VALID_ARGUMENTS=$?
   if [ "$VALID_ARGUMENTS" != "0" ]; then
     #man_help
@@ -931,6 +958,7 @@ main() {
         -b | --rtkbase-release) ARG_RTKBASE_RELEASE=1  ; shift   ;;
         -i | --rtkbase-repo) ARG_RTKBASE_REPO="${2}"   ; shift 2 ;;
         -j | --rtkbase-bundled) ARG_RTKBASE_BLD=1      ; shift   ;;
+        -l | --rtkbase-local) ARG_RTKBASE_LOCAL=1      ; shift   ;;
         -f | --rtkbase-custom) ARG_RTKBASE_SRC="${2}"  ; shift 2 ;;
         -q | --rtkbase-requirements) ARG_RTKBASE_RQS=1 ; shift   ;;
         -t | --unit-files) ARG_UNIT=1                  ; shift   ;;
@@ -957,7 +985,7 @@ main() {
   if [ $ARG_ALL != 0 ] 
   then
     # test if rtkbase source option is correct
-    [[ ' release repo url bundled'  =~ (^|[[:space:]])$ARG_ALL($|[[:space:]]) ]] || { echo 'wrong option, please choose release, repo, url or bundled' ; exit 1 ;}
+    [[ ' release repo url bundled local'  =~ (^|[[:space:]])$ARG_ALL($|[[:space:]]) ]] || { echo 'wrong option, please choose release, repo, url, bundled or local' ; exit 1 ;}
     [[ $ARG_ALL == 'repo' ]] && [[ "${ARG_RTKBASE_REPO}" == "0" ]] && { echo 'you have to specify the branch with --rtkbase-repo' ; exit 1 ;}
     [[ $ARG_ALL == 'url' ]] && [[ "${ARG_RTKBASE_SRC}" == "0" ]] && { echo 'you have to specify the url with --rtkbase-custom' ; exit 1 ;}
     #Okay launching installation
@@ -975,6 +1003,9 @@ main() {
       bundled)
         # https://www.matteomattei.com/create-self-contained-installer-in-bash-that-extracts-archives-and-perform-actitions/
         install_rtkbase_bundled
+        ;;
+      local)
+        install_rtkbase_local
         ;;
     esac                      && \
     rtkbase_requirements      && \
@@ -995,6 +1026,7 @@ main() {
   [ $ARG_RTKBASE_RELEASE -eq 1 ] && { install_rtkbase_from_release && rtkbase_requirements ; ((cumulative_exit+=$?)) ;}
   if [ $ARG_RTKBASE_REPO != 0 ] ; then { install_rtkbase_from_repo "${ARG_RTKBASE_REPO}" && rtkbase_requirements ; ((cumulative_exit+=$?)) ;} ;fi
   [ $ARG_RTKBASE_BLD -eq 1 ] && { install_rtkbase_bundled && rtkbase_requirements ; ((cumulative_exit+=$?)) ;}
+  [ $ARG_RTKBASE_LOCAL -eq 1 ] && { install_rtkbase_local && rtkbase_requirements ; ((cumulative_exit+=$?)) ;}
   if [ $ARG_RTKBASE_SRC != 0 ] ; then { install_rtkbase_custom_source "${ARG_RTKBASE_SRC}" && rtkbase_requirements ; ((cumulative_exit+=$?)) ;} ;fi
   [ $ARG_RTKBASE_RQS -eq 1 ] && { rtkbase_requirements ; ((cumulative_exit+=$?)) ;}
   [ $ARG_UNIT -eq 1 ] && { install_unit_files ; ((cumulative_exit+=$?)) ;}
