@@ -28,14 +28,21 @@
 # You should have received a copy of the GNU General Public License
 # along with ReachView.  If not, see <http://www.gnu.org/licenses/>.
 
-from gevent import monkey
-monkey.patch_all()
+import os
+import sys
+
+ASYNC_MODE = os.environ.get("RTKBASE_ASYNC_MODE")
+if ASYNC_MODE is None:
+    ASYNC_MODE = "threading" if sys.version_info >= (3, 13) else "gevent"
+if ASYNC_MODE not in ("gevent", "threading"):
+    ASYNC_MODE = "gevent"
+if ASYNC_MODE == "gevent":
+    from gevent import monkey
+    monkey.patch_all()
 
 import time
 import json
-import os
 import shutil
-import sys
 import requests
 import tempfile
 import argparse
@@ -87,7 +94,7 @@ path_to_rtklib = "/usr/local/bin" #TODO find path with which or another tool
 
 login=LoginManager(app)
 login.login_view = 'login_page'
-socketio = SocketIO(app, async_mode = 'gevent')
+socketio = SocketIO(app, async_mode=ASYNC_MODE)
 bootstrap = Bootstrap4(app)
 
 #Get settings from settings.conf.default and settings.conf
@@ -1045,16 +1052,19 @@ if __name__ == "__main__":
 
         app.secret_key = rtkbaseconfig.get_secret_key()
         #socketio.run(app, host = "::", port = args.port or rtkbaseconfig.get("general", "web_port", fallback=80), debug=args.debug) # IPv6 "::" is mapped to IPv4
+        worker_class = 'gevent' if ASYNC_MODE == 'gevent' else 'gthread'
         gunicorn_options = {
         'bind': ['%s:%s' % ('0.0.0.0', args.port or rtkbaseconfig.get("general", "web_port", fallback=80)),
                     '%s:%s' % ('[::1]', args.port or rtkbaseconfig.get("general", "web_port", fallback=80)) ],
         'workers': 1,
-        'worker_class': 'gevent',
+        'worker_class': worker_class,
         'graceful_timeout': 10,
         # rtkrcv launch/config can block; avoid premature worker kill
         'timeout': 120,
         'loglevel': 'debug' if args.debug else 'warning',
         }
+        if worker_class == 'gthread':
+            gunicorn_options['threads'] = 4
         #start gunicorn
         StandaloneApplication(app, gunicorn_options).run()
 

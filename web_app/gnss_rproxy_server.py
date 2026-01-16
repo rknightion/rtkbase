@@ -6,8 +6,16 @@
 # Reverse proxy server to acces a Gnss receiver integrated Web Server (Mosaic-X5 or other)
 
 import os
-from gevent import monkey
-monkey.patch_all()
+import sys
+
+ASYNC_MODE = os.environ.get("RTKBASE_ASYNC_MODE")
+if ASYNC_MODE is None:
+    ASYNC_MODE = "threading" if sys.version_info >= (3, 13) else "gevent"
+if ASYNC_MODE not in ("gevent", "threading"):
+    ASYNC_MODE = "gevent"
+if ASYNC_MODE == "gevent":
+    from gevent import monkey
+    monkey.patch_all()
 import requests
 import argparse
 
@@ -184,16 +192,18 @@ if __name__ == "__main__":
         #socketio.run(app, host = "::", port = args.port or rtkbaseconfig.get("general", "web_port", fallback=80), debug=args.debug) # IPv6 "::" is mapped to IPv4
         #wsgi.server(eventlet.listen(("0.0.0.0", int(rtkbaseconfig.get("main", "gnss_rcv_web_proxy_port", fallback=9090)))), app, log_output=False)
 
+        worker_class = 'gevent' if ASYNC_MODE == 'gevent' else 'gthread'
         gunicorn_options = {
         'bind': ['%s:%s' % ('0.0.0.0', args.port or rtkbaseconfig.get("main", "gnss_rcv_web_proxy_port", fallback=9090)),
                     '%s:%s' % ('[::1]', args.port or rtkbaseconfig.get("main", "gnss_rcv_web_proxy_port", fallback=9090)) ],
         'workers': 1,
-        'worker_class': 'gevent',
+        'worker_class': worker_class,
         'loglevel': 'debug' if args.debug else 'warning',
         }
+        if worker_class == 'gthread':
+            gunicorn_options['threads'] = 4
         #start gunicorn
         StandaloneApplication(app, gunicorn_options).run()
 
     except KeyboardInterrupt:
         print("Server interrupted by user!!")
-
