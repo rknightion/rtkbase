@@ -149,8 +149,10 @@ upd_2.4.2() {
   echo '####################'
   echo 'Update from 2.4.2'
   echo '####################'
-  apt-get update -y --allow-releaseinfo-change
-  apt-get --fix-broken install # needed for old installation (raspi image v2.1 from july 2020)
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -y --allow-releaseinfo-change
+    apt-get --fix-broken install # needed for old installation (raspi image v2.1 from july 2020)
+  fi
   # only for Orange Pi Zero, disable sysstats-collect (https://github.com/Stefal/build/issues/14)
   # and update hostapd if error (https://github.com/Stefal/build/issues/15)
   computer_model=$(tr -d '\0' < /sys/firmware/devicetree/base/model)
@@ -159,7 +161,9 @@ upd_2.4.2() {
       then
         echo 'Masking sysstat-collect.timer service and upgrading hostapd'
         systemctl mask sysstat-collect.timer
-        dpkg -s hostapd | grep -q 'Version: 2:2.9' && apt-get upgrade -y hostapd
+        if command -v dpkg >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
+          dpkg -s hostapd | grep -q 'Version: 2:2.9' && apt-get upgrade -y hostapd
+        fi
         rm -r /var/log/sysstat/
     fi
   # end of Orange Pi Zero section

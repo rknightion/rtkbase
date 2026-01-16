@@ -7,6 +7,109 @@ declare RTKBASE_USER
 APT_TIMEOUT='-o dpkg::lock::timeout=3000' #Timeout on lock file (Could not get lock /var/lib/dpkg/lock-frontend)
 MODEM_AT_PORT=/dev/ttymodemAT
 RTKLIB_RELEASE='RTKLIB-2.5.0'
+OS_ID=''
+OS_LIKE=''
+OS_FAMILY=''
+PKG_MGR=''
+
+detect_os() {
+  if [[ -f /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    source /etc/os-release
+  fi
+  OS_ID="${ID:-}"
+  OS_LIKE="${ID_LIKE:-}"
+  if [[ "${OS_ID}" == "fedora" ]] || [[ "${OS_LIKE}" == *"fedora"* ]] || [[ "${OS_LIKE}" == *"rhel"* ]]; then
+    OS_FAMILY='fedora'
+    PKG_MGR='dnf'
+  elif [[ "${OS_ID}" == "debian" ]] || [[ "${OS_ID}" == "ubuntu" ]] || [[ "${OS_ID}" == "raspbian" ]] || [[ "${OS_LIKE}" == *"debian"* ]]; then
+    OS_FAMILY='debian'
+    PKG_MGR='apt'
+  elif command -v dnf >/dev/null 2>&1; then
+    OS_FAMILY='fedora'
+    PKG_MGR='dnf'
+  elif command -v apt-get >/dev/null 2>&1; then
+    OS_FAMILY='debian'
+    PKG_MGR='apt'
+  else
+    echo 'Unsupported OS. Only Debian/Ubuntu/Raspbian and Fedora/RHEL are supported.'
+    exit 1
+  fi
+}
+
+pkg_update() {
+  if [[ "${PKG_MGR}" == "apt" ]]; then
+    apt-get "${APT_TIMEOUT}" update -y || exit 1
+  else
+    dnf -y makecache || exit 1
+  fi
+}
+
+pkg_install() {
+  if [[ "${PKG_MGR}" == "apt" ]]; then
+    apt-get "${APT_TIMEOUT}" install -y "$@" || exit 1
+  else
+    dnf -y install "$@" || exit 1
+  fi
+}
+
+get_gpsd_defaults_path() {
+  if [[ -f /etc/default/gpsd ]]; then
+    echo '/etc/default/gpsd'
+  elif [[ -f /etc/sysconfig/gpsd ]]; then
+    echo '/etc/sysconfig/gpsd'
+  elif [[ "${OS_FAMILY}" == "fedora" ]]; then
+    echo '/etc/sysconfig/gpsd'
+  else
+    echo '/etc/default/gpsd'
+  fi
+}
+
+get_chrony_conf_path() {
+  if [[ -f /etc/chrony.conf ]]; then
+    echo '/etc/chrony.conf'
+  elif [[ -f /etc/chrony/chrony.conf ]]; then
+    echo '/etc/chrony/chrony.conf'
+  else
+    echo '/etc/chrony.conf'
+  fi
+}
+
+get_chrony_service() {
+  if systemctl list-unit-files --type=service 2>/dev/null | awk '{print $1}' | grep -qx 'chronyd.service'; then
+    echo 'chronyd'
+  else
+    echo 'chrony'
+  fi
+}
+
+get_unit_path() {
+  local unit_name=$1
+  local unit_path
+  unit_path=$(systemctl show -p FragmentPath --value "${unit_name}" 2>/dev/null)
+  if [[ -n "${unit_path}" ]] && [[ -f "${unit_path}" ]]; then
+    echo "${unit_path}"
+    return 0
+  fi
+  for unit_dir in /lib/systemd/system /usr/lib/systemd/system; do
+    if [[ -f "${unit_dir}/${unit_name}" ]]; then
+      echo "${unit_dir}/${unit_name}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+set_or_append_config() {
+  local key=$1
+  local value=$2
+  local file_path=$3
+  if grep -q "^${key}=" "${file_path}" 2>/dev/null; then
+    sed -i "s|^${key}=.*|${key}=${value}|" "${file_path}"
+  else
+    echo "${key}=${value}" >> "${file_path}"
+  fi
+}
 
 man_help(){
     echo '################################'
@@ -115,9 +218,13 @@ install_dependencies() {
     echo '################################'
     echo 'INSTALLING DEPENDENCIES'
     echo '################################'
-      apt-get "${APT_TIMEOUT}" update -y || exit 1
-      apt-get "${APT_TIMEOUT}" install -y git build-essential pps-tools python3-pip python3-venv python3-dev python3-setuptools python3-wheel python3-serial libsystemd-dev bc dos2unix socat zip unzip pkg-config psmisc proj-bin nftables || exit 1
-      apt-get "${APT_TIMEOUT}" install -y libxml2-dev libxslt-dev || exit 1 # needed for lxml (for pystemd)
+      pkg_update
+      if [[ "${OS_FAMILY}" == "debian" ]]; then
+        pkg_install git build-essential pps-tools python3-pip python3-venv python3-dev python3-setuptools python3-wheel python3-serial libsystemd-dev bc dos2unix socat zip unzip pkg-config psmisc proj-bin nftables
+        pkg_install libxml2-dev libxslt-dev # needed for lxml (for pystemd)
+      else
+        pkg_install git gcc gcc-c++ make pps-tools python3 python3-pip python3-devel python3-setuptools python3-wheel python3-pyserial systemd-devel bc dos2unix socat zip unzip pkgconf-pkg-config psmisc proj nftables libxml2-devel libxslt-devel
+      fi
       #apt-get "${APT_TIMEOUT}" upgrade -y
 }
 
@@ -125,39 +232,57 @@ install_gpsd_chrony() {
     echo '################################'
     echo 'CONFIGURING FOR USING GPSD + CHRONY'
     echo '################################'
-      apt-get "${APT_TIMEOUT}" install chrony gpsd -y || exit 1
-      #Disabling and masking systemd-timesyncd
-      systemctl stop systemd-timesyncd > /dev/null 2>&1
-      systemctl disable systemd-timesyncd > /dev/null 2>&1
-      systemctl mask systemd-timesyncd > /dev/null 2>&1
+      pkg_install chrony gpsd
+      local chrony_conf
+      local gpsd_defaults
+      local chrony_service
+      local chrony_unit_path
+      local gpsd_unit_path
+      chrony_conf=$(get_chrony_conf_path)
+      gpsd_defaults=$(get_gpsd_defaults_path)
+      chrony_service=$(get_chrony_service)
+
+      #Disabling and masking systemd-timesyncd if present
+      if systemctl list-unit-files --type=service 2>/dev/null | awk '{print $1}' | grep -qx 'systemd-timesyncd.service'; then
+        systemctl stop systemd-timesyncd > /dev/null 2>&1
+        systemctl disable systemd-timesyncd > /dev/null 2>&1
+        systemctl mask systemd-timesyncd > /dev/null 2>&1
+      fi
       #Adding GPS as source for chrony
-      grep -q 'set larger delay to allow the GPS' /etc/chrony/chrony.conf || echo '# set larger delay to allow the GPS source to overlap with the other sources and avoid the falseticker status
-' >> /etc/chrony/chrony.conf
-      grep -qxF 'refclock SHM 0 refid GNSS precision 1e-1 offset 0 delay 0.2' /etc/chrony/chrony.conf || echo 'refclock SHM 0 refid GNSS precision 1e-1 offset 0 delay 0.2' >> /etc/chrony/chrony.conf
+      grep -q 'set larger delay to allow the GPS' "${chrony_conf}" || echo '# set larger delay to allow the GPS source to overlap with the other sources and avoid the falseticker status
+' >> "${chrony_conf}"
+      grep -qxF 'refclock SHM 0 refid GNSS precision 1e-1 offset 0 delay 0.2' "${chrony_conf}" || echo 'refclock SHM 0 refid GNSS precision 1e-1 offset 0 delay 0.2' >> "${chrony_conf}"
       #Adding PPS as an optionnal source for chrony
-      grep -q 'refclock PPS /dev/pps0 refid PPS lock GNSS' /etc/chrony/chrony.conf || echo '#refclock PPS /dev/pps0 refid PPS lock GNSS' >> /etc/chrony/chrony.conf
+      grep -q 'refclock PPS /dev/pps0 refid PPS lock GNSS' "${chrony_conf}" || echo '#refclock PPS /dev/pps0 refid PPS lock GNSS' >> "${chrony_conf}"
 
-      #Overriding chrony.service with custom dependency
-      cp /lib/systemd/system/chrony.service /etc/systemd/system/chrony.service
-      sed -i s/^After=.*/After=gpsd.service/ /etc/systemd/system/chrony.service
+      #Overriding chrony service with custom dependency
+      chrony_unit_path=$(get_unit_path "${chrony_service}.service")
+      if [[ -n "${chrony_unit_path}" ]]; then
+        cp "${chrony_unit_path}" "/etc/systemd/system/${chrony_service}.service"
+        sed -i 's/^After=.*/After=gpsd.service/' "/etc/systemd/system/${chrony_service}.service"
+      fi
 
-      #disable hotplug
-      sed -i 's/^USBAUTO=.*/USBAUTO="false"/' /etc/default/gpsd
-      #Setting correct input for gpsd
-      sed -i 's/^DEVICES=.*/DEVICES="tcp:\/\/localhost:5015"/' /etc/default/gpsd
+      #Configure gpsd defaults
+      touch "${gpsd_defaults}"
+      set_or_append_config "USBAUTO" "\"false\"" "${gpsd_defaults}"
+      set_or_append_config "DEVICES" "\"tcp://localhost:5015\"" "${gpsd_defaults}"
       #Adding example for using pps
-      grep -qi 'DEVICES="tcp:/localhost:5015 /dev/pps0' /etc/default/gpsd || sed -i '/^DEVICES=.*/a #DEVICES="tcp:\/\/localhost:5015 \/dev\/pps0"' /etc/default/gpsd
+      grep -qi 'DEVICES="tcp://localhost:5015 /dev/pps0' "${gpsd_defaults}" || echo '#DEVICES="tcp://localhost:5015 /dev/pps0"' >> "${gpsd_defaults}"
       #gpsd should always run, in read only mode
-      sed -i 's/^GPSD_OPTIONS=.*/GPSD_OPTIONS="-n -b"/' /etc/default/gpsd
+      set_or_append_config "GPSD_OPTIONS" "\"-n -b\"" "${gpsd_defaults}"
+
       #Overriding gpsd.service with custom dependency
-      cp /lib/systemd/system/gpsd.service /etc/systemd/system/gpsd.service
-      sed -i 's/^After=.*/After=str2str_tcp.service/' /etc/systemd/system/gpsd.service
-      sed -i '/^# Needed with chrony/d' /etc/systemd/system/gpsd.service
-      #Add restart condition
-      grep -qi '^Restart=' /etc/systemd/system/gpsd.service || sed -i '/^ExecStart=.*/a Restart=always' /etc/systemd/system/gpsd.service
-      grep -qi '^RestartSec=' /etc/systemd/system/gpsd.service || sed -i '/^Restart=always.*/a RestartSec=30' /etc/systemd/system/gpsd.service
-      #Add ExecStartPre condition to not start gpsd if str2str_tcp is not running. See https://github.com/systemd/systemd/issues/1312
-      grep -qi '^ExecStartPre=' /etc/systemd/system/gpsd.service || sed -i '/^ExecStart=.*/i ExecStartPre=systemctl is-active str2str_tcp.service' /etc/systemd/system/gpsd.service
+      gpsd_unit_path=$(get_unit_path "gpsd.service")
+      if [[ -n "${gpsd_unit_path}" ]]; then
+        cp "${gpsd_unit_path}" /etc/systemd/system/gpsd.service
+        sed -i 's/^After=.*/After=str2str_tcp.service/' /etc/systemd/system/gpsd.service
+        sed -i '/^# Needed with chrony/d' /etc/systemd/system/gpsd.service
+        #Add restart condition
+        grep -qi '^Restart=' /etc/systemd/system/gpsd.service || sed -i '/^ExecStart=.*/a Restart=always' /etc/systemd/system/gpsd.service
+        grep -qi '^RestartSec=' /etc/systemd/system/gpsd.service || sed -i '/^Restart=always.*/a RestartSec=30' /etc/systemd/system/gpsd.service
+        #Add ExecStartPre condition to not start gpsd if str2str_tcp is not running. See https://github.com/systemd/systemd/issues/1312
+        grep -qi '^ExecStartPre=' /etc/systemd/system/gpsd.service || sed -i '/^ExecStart=.*/i ExecStartPre=systemctl is-active str2str_tcp.service' /etc/systemd/system/gpsd.service
+      fi
 
       #Reload systemd services and enable chrony and gpsd
       systemctl daemon-reload
@@ -179,7 +304,7 @@ install_rtklib() {
     #test if computer_model in sbc_array (https://stackoverflow.com/questions/3685970/check-if-a-bash-array-contains-a-value)
     if printf '%s\0' "${sbc_array[@]}" | grep -Fxqz -- "${computer_model}" \
         && [[ -f "${rtkbase_path}"'/tools/bin/'"${RTKLIB_RELEASE}"'/'"${arch_package}"'/str2str' ]] \
-        && lsb_release -c | grep -qE 'bookworm|trixie' \
+        && command -v lsb_release >/dev/null 2>&1 && lsb_release -c | grep -qE 'bookworm|trixie' \
         && "${rtkbase_path}"'/tools/bin/'"${RTKLIB_RELEASE}"'/'"${arch_package}"/str2str --version > /dev/null 2>&1 \
         && "${rtkbase_path}"'/tools/bin/'"${RTKLIB_RELEASE}"'/'"${arch_package}"/convbin --version > /dev/null 2>&1 \
         && "${rtkbase_path}"'/tools/bin/'"${RTKLIB_RELEASE}"'/'"${arch_package}"/rtkrcv --version > /dev/null 2>&1
@@ -339,7 +464,11 @@ rtkbase_requirements(){
       if [[ $platform =~ 'aarch64' ]] || [[ $platform =~ 'x86_64' ]]
         then
           # More dependencies needed for aarch64 as there is no prebuilt wheel on piwheels.org
-          apt-get "${APT_TIMEOUT}" install -y libssl-dev libffi-dev || exit 1
+          if [[ "${OS_FAMILY}" == "debian" ]]; then
+            pkg_install libssl-dev libffi-dev
+          else
+            pkg_install openssl-devel libffi-devel
+          fi
       fi      
       # Copying udev rules
       [[ ! -d /etc/udev/rules.d ]] && mkdir /etc/udev/rules.d/
@@ -700,11 +829,13 @@ start_services() {
   echo '################################'
   echo 'STARTING SERVICES'
   echo '################################'
+  local chrony_service
+  chrony_service=$(get_chrony_service)
   systemctl daemon-reload
   systemctl enable --now rtkbase_web.service
   systemctl enable --now str2str_tcp.service
   systemctl restart gpsd.service
-  systemctl restart chrony.service
+  systemctl restart "${chrony_service}".service
   systemctl enable --now rtkbase_archive.timer
   grep -qE "^modem_at_port='/[[:alnum:]]+.*'" "${rtkbase_path}"/settings.conf && systemctl enable --now modem_check.timer
   grep -q "receiver='Septentrio_Mosaic-X5'" "${rtkbase_path}"/settings.conf && systemctl enable --now rtkbase_gnss_web_proxy.service
@@ -722,7 +853,9 @@ install_zeroconf_service() {
   echo 'INSTALLING ZEROCONF/AVAHI DEFINITION SERVICE'
   echo '################################'
   #Test is avahi is running and directory for services definition exists
-  type avahi-daemon >/dev/null 2>&1 || apt-get "${APT_TIMEOUT}" install -y avahi-daemon
+  local avahi_pkg='avahi-daemon'
+  [[ "${OS_FAMILY}" == "fedora" ]] && avahi_pkg='avahi'
+  type avahi-daemon >/dev/null 2>&1 || pkg_install "${avahi_pkg}"
   if systemctl is-active --quiet avahi-daemon.service && [[ -d /etc/avahi/services ]]
   then
     web_port=$(grep "^web_port=.*" "${rtkbase_path}"/settings.conf | cut -d "=" -f2)
@@ -746,6 +879,8 @@ main() {
       export rtkbase_path='rtkbase'
     fi
   fi
+
+  detect_os
   
   # check if there is at least 300MB of free space on the root partition to install rtkbase
   if [[ $(df "$HOME" | awk 'NR==2 { print $4 }') -lt 300000 ]]
