@@ -463,10 +463,17 @@ install_rtkbase_local() {
     echo '################################'
     local script_dir
     local repo_root
+    local repo_group
     script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
     repo_root=$(dirname "${script_dir}")
     if [[ ! -f "${repo_root}/settings.conf.default" ]]; then
       echo 'Local repository not found. Please run this script from a valid rtkbase checkout.'
+      exit 1
+    fi
+    if ! sudo -u "${RTKBASE_USER}" test -w "${repo_root}"; then
+      repo_group=$(id -gn "${RTKBASE_USER}" 2>/dev/null || echo "${RTKBASE_USER}")
+      echo "User '${RTKBASE_USER}' does not have write access to ${repo_root}."
+      echo "Fix it with: sudo chown -R ${RTKBASE_USER}:${repo_group} ${repo_root}"
       exit 1
     fi
     rtkbase_path="${repo_root}"
