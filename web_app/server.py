@@ -611,7 +611,8 @@ def startBase():
         return
     # We must start rtkcv before trying to modify an option
     rtk.startBase()
-    saved_input_path = "localhost" + ":" + rtkbaseconfig.get("main", "tcp_port").strip("'")
+    tcp_host = rtkbaseconfig.get("main", "tcp_host_addr").strip("'") or "127.0.0.1"
+    saved_input_path = tcp_host + ":" + rtkbaseconfig.get("main", "tcp_port").strip("'")
     if rtk.get_rtkcv_option("inpstr1-path") != saved_input_path:
         rtk.set_rtkcv_option("inpstr1-path", saved_input_path)
         rtk.set_rtkcv_pending_refresh(True)
