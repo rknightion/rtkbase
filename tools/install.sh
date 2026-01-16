@@ -111,6 +111,18 @@ set_or_append_config() {
   fi
 }
 
+get_system_python() {
+  if [[ -x /usr/bin/python3 ]]; then
+    echo '/usr/bin/python3'
+    return 0
+  fi
+  if [[ -x /bin/python3 ]]; then
+    echo '/bin/python3'
+    return 0
+  fi
+  command -v python3
+}
+
 man_help(){
     echo '################################'
     echo 'RTKBASE INSTALLATION HELP'
@@ -559,6 +571,8 @@ detect_gnss() {
     echo '################################'
     echo 'USB GNSS RECEIVER DETECTION'
     echo '################################'
+      local sys_py
+      sys_py=$(get_system_python)
       #This function try to detect a gnss receiver and write the port/format inside settings.conf
       #If the receiver is a U-Blox, it will add the TADJ=1 option on all ntrip/rtcm outputs.
       #If there are several receiver, the last one detected will be add to settings.conf.
@@ -602,13 +616,13 @@ detect_gnss() {
         for port in ttyS0 ttyUSB0 ttyUSB1 ttyUSB2 serial0 ttyS1 ttyS2 ttyS3 ttyS4 ttyS5; do
             for port_speed in 115200 57600 38400 19200 9600; do
                 echo 'DETECTION ON ' $port ' at ' $port_speed
-                if [[ $(python3 "${rtkbase_path}"/tools/ubxtool -f /dev/$port -s $port_speed -p MON-VER -w 5 2>/dev/null) =~ 'ZED-F9P' ]]; then
+                if [[ $(${sys_py} "${rtkbase_path}"/tools/ubxtool -f /dev/$port -s $port_speed -p MON-VER -w 5 2>/dev/null) =~ 'ZED-F9P' ]]; then
                     detected_gnss[0]=$port
                     detected_gnss[1]='u-blox'
                     detected_gnss[2]=$port_speed
                     #echo 'U-blox ZED-F9P DETECTED ON '$port $port_speed
                     break
-                elif { model=$(python3 "${rtkbase_path}"/tools/unicore_tool.py --port /dev/$port --baudrate $port_speed --command get_model 2>/dev/null) ; [[ "${model}" == 'UM98'[0-2] ]] ;}; then
+                elif { model=$(${sys_py} "${rtkbase_path}"/tools/unicore_tool.py --port /dev/$port --baudrate $port_speed --command get_model 2>/dev/null) ; [[ "${model}" == 'UM98'[0-2] ]] ;}; then
                     detected_gnss[0]=$port
                     detected_gnss[1]='unicore'
                     detected_gnss[2]=$port_speed
@@ -630,7 +644,7 @@ detect_gnss() {
         then
           detected_gnss[1]='u-blox'
           #get U-Blox firmware release
-          ubx_monver="$(python3 "${rtkbase_path}"/tools/ubxtool -f /dev/"${detected_gnss[0]}" -s ${detected_gnss[2]} -p MON-VER | grep -e 'FWVER' -e 'MOD')"
+          ubx_monver="$(${sys_py} "${rtkbase_path}"/tools/ubxtool -f /dev/"${detected_gnss[0]}" -s ${detected_gnss[2]} -p MON-VER | grep -e 'FWVER' -e 'MOD')"
           detected_gnss[3]=$(grep 'FWVER' <<< "${ubx_monver}" | awk '{print $NF}')
           [[ $(grep 'MOD' <<< "${ubx_monver}" | awk -F '=' '{print $NF}') == 'ZED-F9P' ]] && detected_gnss[4]='ZED-F9P'
 
@@ -638,15 +652,15 @@ detect_gnss() {
         then
           detected_gnss[1]='septentrio'
           #get Septentrio model and firmware release
-          detected_gnss[3]="$( { python3 "${rtkbase_path}"/tools/sept_tool.py --port /dev/ttyGNSS_CTRL --baudrate ${detected_gnss[2]} --command get_firmware --retry 5 2>/dev/null || echo '?'; } | tail -n 1 )"
-          detected_gnss[4]="$( { python3 "${rtkbase_path}"/tools/sept_tool.py --port /dev/ttyGNSS_CTRL --baudrate ${detected_gnss[2]} --command get_model --retry 5 2>/dev/null || echo '?'; } | tail -n 1 )"
+          detected_gnss[3]="$( { ${sys_py} "${rtkbase_path}"/tools/sept_tool.py --port /dev/ttyGNSS_CTRL --baudrate ${detected_gnss[2]} --command get_firmware --retry 5 2>/dev/null || echo '?'; } | tail -n 1 )"
+          detected_gnss[4]="$( { ${sys_py} "${rtkbase_path}"/tools/sept_tool.py --port /dev/ttyGNSS_CTRL --baudrate ${detected_gnss[2]} --command get_model --retry 5 2>/dev/null || echo '?'; } | tail -n 1 )"
 
       elif [[ "${detected_gnss[1]}" =~ 'unicore' ]]
         then
           detected_gnss[1]='unicore'
           #get Unicore model and firmware release
-          detected_gnss[3]="$( { python3 "${rtkbase_path}"/tools/unicore_tool.py --port /dev/"${detected_gnss[0]}" --baudrate ${detected_gnss[2]} --command get_firmware --retry 5 2>/dev/null || echo '?'; } | tail -n 1 )"
-          detected_gnss[4]="$( { python3 "${rtkbase_path}"/tools/unicore_tool.py --port /dev/"${detected_gnss[0]}" --baudrate ${detected_gnss[2]} --command get_model --retry 5 2>/dev/null || echo '?'; } | tail -n 1 )"
+          detected_gnss[3]="$( { ${sys_py} "${rtkbase_path}"/tools/unicore_tool.py --port /dev/"${detected_gnss[0]}" --baudrate ${detected_gnss[2]} --command get_firmware --retry 5 2>/dev/null || echo '?'; } | tail -n 1 )"
+          detected_gnss[4]="$( { ${sys_py} "${rtkbase_path}"/tools/unicore_tool.py --port /dev/"${detected_gnss[0]}" --baudrate ${detected_gnss[2]} --command get_model --retry 5 2>/dev/null || echo '?'; } | tail -n 1 )"
 
       fi
       # "send" result
@@ -694,6 +708,8 @@ configure_gnss(){
     echo '################################'
     echo 'CONFIGURE GNSS RECEIVER'
     echo '################################'
+      local sys_py
+      sys_py=$(get_system_python)
       if [ -d "${rtkbase_path}" ]
       then
         source <( grep -v '^#' "${rtkbase_path}"/settings.conf | grep '=' ) 
@@ -709,10 +725,10 @@ configure_gnss(){
         sudo -u "${RTKBASE_USER}" sed -i s/^rtcm_serial_receiver_options=.*/rtcm_serial_receiver_options=/ "${rtkbase_path}"/settings.conf
 
         #if the receiver is a U-Blox F9P, launch the set_zed-f9p.sh. This script will reset the F9P and configure it with the corrects settings for rtkbase
-        if [[ $(python3 "${rtkbase_path}"/tools/ubxtool -f /dev/"${com_port}" -s ${com_port_settings%%:*} -p MON-VER) =~ 'ZED-F9P' ]]
+        if [[ $(${sys_py} "${rtkbase_path}"/tools/ubxtool -f /dev/"${com_port}" -s ${com_port_settings%%:*} -p MON-VER) =~ 'ZED-F9P' ]]
         then
           #get F9P firmware release
-          firmware=$(python3 "${rtkbase_path}"/tools/ubxtool -f /dev/"${com_port}" -s ${com_port_settings%%:*} -p MON-VER | grep 'FWVER' | awk '{print $NF}')
+          firmware=$(${sys_py} "${rtkbase_path}"/tools/ubxtool -f /dev/"${com_port}" -s ${com_port_settings%%:*} -p MON-VER | grep 'FWVER' | awk '{print $NF}')
           echo 'F9P Firmware: ' "${firmware}"
           sudo -u "${RTKBASE_USER}" sed -i s/^receiver_firmware=.*/receiver_firmware=\'${firmware}\'/ "${rtkbase_path}"/settings.conf
           #configure the F9P for RTKBase
@@ -735,23 +751,23 @@ configure_gnss(){
           sudo -u "${RTKBASE_USER}" sed -i -r '/^rtcm_/s/1107(\([0-9]+\))?,//' "${rtkbase_path}"/settings.conf                                              && \
           return $?
         
-        elif [[ $(python3 "${rtkbase_path}"/tools/sept_tool.py --port /dev/ttyGNSS_CTRL --baudrate ${com_port_settings%%:*} --command get_model) =~ 'mosaic-X5' ]]
+        elif [[ $(${sys_py} "${rtkbase_path}"/tools/sept_tool.py --port /dev/ttyGNSS_CTRL --baudrate ${com_port_settings%%:*} --command get_model) =~ 'mosaic-X5' ]]
         then
           #get mosaic-X5 firmware release
-          firmware="$(python3 "${rtkbase_path}"/tools/sept_tool.py --port /dev/ttyGNSS_CTRL --baudrate ${com_port_settings%%:*} --command get_firmware --retry 5)" || firmware='?'
+          firmware="$(${sys_py} "${rtkbase_path}"/tools/sept_tool.py --port /dev/ttyGNSS_CTRL --baudrate ${com_port_settings%%:*} --command get_firmware --retry 5)" || firmware='?'
           echo 'Mosaic-X5 Firmware: ' "${firmware}"
           sudo -u "${RTKBASE_USER}" sed -i s/^receiver_firmware=.*/receiver_firmware=\'${firmware}\'/ "${rtkbase_path}"/settings.conf
           #configure the mosaic-X5 for RTKBase
           echo 'Resetting the mosaic-X5 settings....'
-          python3 "${rtkbase_path}"/tools/sept_tool.py --port /dev/ttyGNSS_CTRL --baudrate ${com_port_settings%%:*} --command reset --retry 5
+          ${sys_py} "${rtkbase_path}"/tools/sept_tool.py --port /dev/ttyGNSS_CTRL --baudrate ${com_port_settings%%:*} --command reset --retry 5
           sleep_time=30 ; echo 'Waiting '$sleep_time's for mosaic-X5 reboot' ; sleep $sleep_time
           if [ $(_version $firmware) -ge $(_version '4.15.0') ]
           then
             echo 'Sending settings....'
-            python3 "${rtkbase_path}"/tools/sept_tool.py --port /dev/ttyGNSS_CTRL --baudrate ${com_port_settings%%:*} --command send_config_file "${rtkbase_path}"/receiver_cfg/Septentrio_Mosaic-X5_4.15.cfg --store --retry 5
+            ${sys_py} "${rtkbase_path}"/tools/sept_tool.py --port /dev/ttyGNSS_CTRL --baudrate ${com_port_settings%%:*} --command send_config_file "${rtkbase_path}"/receiver_cfg/Septentrio_Mosaic-X5_4.15.cfg --store --retry 5
           else
             echo 'Sending legacy settings....'
-            python3 "${rtkbase_path}"/tools/sept_tool.py --port /dev/ttyGNSS_CTRL --baudrate ${com_port_settings%%:*} --command send_config_file "${rtkbase_path}"/receiver_cfg/Septentrio_Mosaic-X5.cfg --store --retry 5
+            ${sys_py} "${rtkbase_path}"/tools/sept_tool.py --port /dev/ttyGNSS_CTRL --baudrate ${com_port_settings%%:*} --command send_config_file "${rtkbase_path}"/receiver_cfg/Septentrio_Mosaic-X5.cfg --store --retry 5
           fi
           if [[ $? -eq  0 ]]
           then
@@ -768,18 +784,18 @@ configure_gnss(){
             return $?
           fi
 
-        elif { model=$(python3 "${rtkbase_path}"/tools/unicore_tool.py --port /dev/${com_port} --baudrate ${com_port_settings%%:*} --command get_model 2>/dev/null) ; [[ "${model}" == 'UM98'[0-2] ]] ;}
+        elif { model=$(${sys_py} "${rtkbase_path}"/tools/unicore_tool.py --port /dev/${com_port} --baudrate ${com_port_settings%%:*} --command get_model 2>/dev/null) ; [[ "${model}" == 'UM98'[0-2] ]] ;}
           then
           #get UM98x firmware release
-          firmware="$(python3 "${rtkbase_path}"/tools/unicore_tool.py --port /dev/${com_port} --baudrate ${com_port_settings%%:*} --command get_firmware 2>/dev/null)" || firmware='?'
+          firmware="$(${sys_py} "${rtkbase_path}"/tools/unicore_tool.py --port /dev/${com_port} --baudrate ${com_port_settings%%:*} --command get_firmware 2>/dev/null)" || firmware='?'
           echo 'Unicore-' "${model}" 'Firmware: ' "${firmware}"
           sudo -u "${RTKBASE_USER}" sed -i s/^receiver_firmware=.*/receiver_firmware=\'${firmware}\'/ "${rtkbase_path}"/settings.conf
           #configure the UM980/UM982 for RTKBase
           echo 'Resetting the ' "${model}" ' settings....'
-          python3 "${rtkbase_path}"/tools/unicore_tool.py --port /dev/${com_port} --baudrate ${com_port_settings%%:*} --command reset --retry 5
+          ${sys_py} "${rtkbase_path}"/tools/unicore_tool.py --port /dev/${com_port} --baudrate ${com_port_settings%%:*} --command reset --retry 5
           sleep_time=10 ; echo 'Waiting '$sleep_time's for ' "${model}" ' reboot' ; sleep $sleep_time
           echo 'Sending settings....'
-          python3 "${rtkbase_path}"/tools/unicore_tool.py --port /dev/${com_port} --baudrate ${com_port_settings%%:*} --command send_config_file "${rtkbase_path}"/receiver_cfg/Unicore_"${model}"_rtcm3.cfg --store --retry 2
+          ${sys_py} "${rtkbase_path}"/tools/unicore_tool.py --port /dev/${com_port} --baudrate ${com_port_settings%%:*} --command send_config_file "${rtkbase_path}"/receiver_cfg/Unicore_"${model}"_rtcm3.cfg --store --retry 2
           if [[ $? -eq  0 ]]
           then
             echo 'Unicore UM980 successfuly configured'

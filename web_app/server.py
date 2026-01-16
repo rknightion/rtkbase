@@ -1050,6 +1050,8 @@ if __name__ == "__main__":
         'workers': 1,
         'worker_class': 'gevent',
         'graceful_timeout': 10,
+        # rtkrcv launch/config can block; avoid premature worker kill
+        'timeout': 120,
         'loglevel': 'debug' if args.debug else 'warning',
         }
         #start gunicorn
